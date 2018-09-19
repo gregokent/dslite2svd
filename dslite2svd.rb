@@ -26,10 +26,13 @@ def common_id_prefix(nodes, basename)
     /^#{Regexp.escape basename}_/
   else
     prefix = nodes.first.get('id').dup
+    counter = 1
     nodes.each do |node|
       until node.get('id').start_with?(prefix) && node.get('id') != prefix
+          puts counter
         prefix.sub!(/_[^_]+_?$/, '_')
       end
+      counter += 1
     end
     /^#{Regexp.escape prefix}/
   end
@@ -84,7 +87,7 @@ svd.device(schemaVersion: '1.1',
     instances = device.xpath('router//instance')
     seen_instances = {}
     instances.each do |instance|
-      if %w(cs_dap_0 cortex_m3_0 cortex_m4_0 fpu nvic).include?(instance.get('id').downcase)
+      if %w(cortex_r5_0 vfp cp15 cs_dap_0 cortex_m3_0 cortex_m4_0 fpu nvic).include?(instance.get('id').downcase)
         next
       end
 
@@ -122,7 +125,9 @@ svd.device(schemaVersion: '1.1',
         next if seen_instance
 
         registers = mod.xpath('register')
-        register_id_prefix = common_id_prefix(registers, instance.get('id'))
+        puts instance.get('id')
+        #register_id_prefix = common_id_prefix(registers, instance.get('id'))
+        register_id_prefix = ''
         seen_registers = []
         x.registers do |x|
           registers.each do |register|
@@ -139,7 +144,12 @@ svd.device(schemaVersion: '1.1',
             x.register do |x|
               x.name(strip_id_prefix(register, register_id_prefix))
               x.displayName(register.get('acronym'))
-              x.description(register.get('description'))
+              if register.get('description').empty?
+                x.description('no description')
+              else
+                x.description(register.get('description'))
+              end
+              
               if register.get('offset').nil?
                 raise "No register offset in #{register.inspect}"
               end
@@ -167,24 +177,46 @@ svd.device(schemaVersion: '1.1',
                 next
               end
 
-              bitfield_id_prefix = common_id_prefix(bitfields, register.get('id'))
+              resetvalue=0
+              bitfields.each do |bitfield|
+                if !bitfield.get('resetval').empty?
+                    resetvalue = resetvalue | (Integer(bitfield.get('resetval')) << Integer(bitfield.get('end')))
+                  #raise "Unexpected non-empty resetval in #{bitfield}"
+                end
+              end
+              x.resetValue("0x#{resetvalue.to_s(16)}")
+              x.resetMask("0xFFFFFFFF")
+              #bitfield_id_prefix = common_id_prefix(bitfields, register.get('id'))
+              bitfield_id_prefix =''
               x.fields do
+                  counter = 1
                 bitfields.each do |bitfield|
                   x.field do |x|
-                    if bitfields.one? && bitfield.get('id') == register.get('id')
-                      x.name(sanitize_ident(bitfield.get('id').sub(/^.+_/, '')))
+                    
+                    if %w(_rsvd).include?(bitfield.get('id').downcase)
+                        x.name("_RSVD#{counter}")
+                        counter += 1
                     else
-                      x.name(strip_id_prefix(bitfield, bitfield_id_prefix))
+					  if bitfields.one? && bitfield.get('id') == register.get('id')
+                        x.name(sanitize_ident(bitfield.get('id').sub(/^.+_/, '')))
+                      else
+                        x.name(strip_id_prefix(bitfield, bitfield_id_prefix))
+                      end
                     end
-                    x.description(bitfield.get('description'))
+                    if bitfield.get('description').empty?
+                      x.description('no description')
+                    else
+                      x.description(bitfield.get('description'))
+                    end
                     x.lsb(bitfield.get('end'))
                     x.msb(bitfield.get('begin'))
                     x.access(access_map.fetch(bitfield.get('rwaccess')))
                     if !bitfield.get('range').empty?
-                      raise "Unexpected non-empty range in #{bitfield}"
+                      #raise "Unexpected non-empty range in #{bitfield}"
                     end
                     if !bitfield.get('resetval').empty?
-                      raise "Unexpected non-empty resetval in #{bitfield}"
+                        resetvalue = resetvalue | (Integer(bitfield.get('resetval')) << Integer(bitfield.get('end')))
+                      #raise "Unexpected non-empty resetval in #{bitfield}"
                     end
 
                     bitenums = bitfield.xpath('bitenum')
@@ -195,15 +227,20 @@ svd.device(schemaVersion: '1.1',
                     end
                     next if bitenums.empty?
 
-                    bitenum_id_prefix = common_id_prefix(bitenums, bitfield.get('id'))
+                    #bitenum_id_prefix = common_id_prefix(bitenums, bitfield.get('id'))
+                    bitenum_id_prefix = ''
                     x.enumeratedValues do |x|
                       bitenums.each do |bitenum|
                         x.enumeratedValue do |x|
                           x.name(strip_id_prefix(bitenum, bitenum_id_prefix))
-                          x.description(bitenum.get('description'))
+                          if bitenum.get('description').empty?
+                            x.description('no description')
+                          else
+                            x.description(bitenum.get('description'))
+                          end
 
                           value = Integer(bitenum.get('value'))
-                          value >>= Integer(bitfield.get('end'))
+                          #value >>= Integer(bitfield.get('end'))
                           x.value("0x#{value.to_s(16)}")
 
                           if !bitenum.get('token')
